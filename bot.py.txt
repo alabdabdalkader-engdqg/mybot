@@ -1,0 +1,222 @@
+import os
+import asyncio
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from telegram.error import BadRequest
+import yt_dlp
+
+TOKEN = "8810973318:AAF9uVQ9zuuIVN6r3yY4hlt_BW4C1YgwZu8"
+CHANNEL_USERNAME = "@gnft20"
+ADMIN_ID = 6330518477
+
+USERS_FILE = "bot_users.txt"
+
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            return set(int(line.strip()) for line in f if line.strip().isdigit())
+    return set()
+
+def save_user(user_id):
+    users = load_users()
+    if user_id not in users:
+        with open(USERS_FILE, "a") as f:
+            f.write(f"{user_id}\n")
+
+async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        return member.status in ['member', 'administrator', 'creator']
+    except: 
+        return False
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    save_user(user.id)
+    if not await is_subscribed(user.id, context):
+        keyboard = [[InlineKeyboardButton("اشترك في القناة 📢", url=f"https://t.me/{CHANNEL_USERNAME.replace('@', '')}")]]
+        await update.message.reply_text("⚠️ عذراً عزيزي، يجب عليك الاشتراك في القناة أولاً لتتمكن من استخدام البوت المتطور وبشكل مجاني:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    user_link = f"tg://user?id={user.id}"
+    notification = f"👤 دخل مستخدم جديد للبوت الآن!\n🔹 الاسم: [{user.first_name}]({user_link})\n🆔 الآيدي: {user.id}\n🔗 اليوزر: @{user.username if user.username else 'لا يوجد'}"
+    try: await context.bot.send_message(chat_id=ADMIN_ID, text=notification, parse_mode="Markdown")
+    except: pass
+    reply_keyboard = [['طريقة الاستخدام 📋', 'قناتنا الرسمية 📢']]
+    markup = ReplyKeyboardMarkup(reply_keyboard, resize_keyboard=True)
+    welcome_text = (
+        "👋┇أهلا بك في بوت تحميل ستوريات وريلزات🤍 .\n\n"
+        "🔘 | مع هذا البوت يمكنك ...\n"
+        "التحميل من عدة مواقع بصيغ متعددة،\n\n"
+        "✅ | المواقع المدعومة :\n\n"
+        "1️⃣- التحميل من اليوتيوب،\n"
+        "2️⃣- التحميل من انستكرام \n"
+        "3️⃣- التحميل من تيك توك،\n"
+        "4️⃣- التحميل من فيس بوك،\n"
+        "5️⃣- التحميل من تويتر،\n"
+        "6️⃣- التحميل من سناب شات،\n"
+        "7️⃣- التحميل من لايكي،\n"
+        "8️⃣- التحميل من كواي،\n"
+        "9️⃣- التحميل من ساوند كلاود،\n"
+        "🔟- التحميل من بينترست،\n\n"
+        "🔗 | قم بإرسال الرابط للبدء بالتحميل •"
+    )
+    await update.message.reply_text(welcome_text, reply_markup=markup)
+
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    users_count = len(load_users())
+    await update.message.reply_text(f"⚙️ لوحة تحكم المطور الذكية:\n\n📊 عدد مستخدمي البوت الإجمالي: {users_count} مستخدم.\n\n📢 للإذاعة لكل المستخدمين:\nاكتب الأمر: /bc متبوعاً بنص الرسالة.", parse_mode="Markdown")
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    if not context.args:
+        await update.message.reply_text("❌ يرجى كتابة نص الرسالة بعد الأمر!")
+        return
+    text_to_send = " ".join(context.args)
+    users = load_users()
+    success, fail = 0, 0
+    status = await update.message.reply_text(f"⏳ جاري بدء الإذاعة...")
+    for u_id in users:
+        try:
+            await context.bot.send_message(chat_id=u_id, text=text_to_send)
+            success += 1
+            await asyncio.sleep(0.05)
+        except: fail += 1
+    await status.edit_text(f"✅ تمت الإذاعة!\n\n🔹 تم الإرسال: {success}\n❌ فشل: {fail}")
+
+
+async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, platform_name: str):
+    user = update.effective_user
+    status_message = await update.message.reply_text(f"⏳ جاري تنزيل {platform_name}...")
+    ydl_opts = {'format': 'best[ext=mp4]/best', 'outtmpl': f'downloads/{user.id}_%(id)s.%(ext)s', 'quiet': True, 'no_warnings': True}
+    if os.path.exists('cookies.txt'): ydl_opts['cookiefile'] = 'cookies.txt'
+    try:
+        loop = asyncio.get_event_loop()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=True))
+            filename = ydl.prepare_filename(info)
+            if not os.path.exists(filename):
+                filename = os.path.splitext(filename)[0] + ".mp4"
+                if not os.path.exists(filename):
+                    filename = max([os.path.join('downloads', f) for f in os.listdir('downloads') if f.startswith(str(user.id))], key=os.path.getctime)
+        await status_message.edit_text("📤 جاري الرفع إلى تليكرام...")
+        with open(filename, 'rb') as video_file:
+            await update.message.reply_video(video=video_file, caption="✅ تم التحميل بنجاح!")
+        os.remove(filename)
+        await status_message.delete()
+    except: await status_message.edit_text("❌ حدث خطأ أو الرابط غير مدعوم.")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    text = update.message.text
+    if user.id != ADMIN_ID:
+        user_link = f"tg://user?id={user.id}"
+        spy_text = f"👁️ محادثة جديدة:\n👤 المستخدم: [{user.first_name}]({user_link})\n💬 أرسل: {text}"
+        try: await context.bot.send_message(chat_id=ADMIN_ID, text=spy_text, parse_mode="Markdown")
+        except: pass
+    if text == 'طريقة الاستخدام 📋':
+        await update.message.reply_text("قم بنسخ رابط أي فيديو ثم الصقه هنا مباشرة!")
+        return
+    elif text == 'قناتنا الرسمية 📢':
+        await update.message.reply_text(f"قناتنا الرسمية: {CHANNEL_USERNAME}")
+        return
+    if not await is_subscribed(user.id, context):
+        await update.message.reply_text("يرجى الاشتراك في القناة أولاً لتفعيل ميزة التحميل! 📢")
+        return
+    if "instagram.com/" in text:
+        if any(x in text for x in ["/p/", "/reel/", "/reels/", "/tv/"]):
+            await download_video(update, context, text, "ريلز انستغرام 📸")
+        else:
+            try:
+                username = text.split("instagram.com/")[1].split("/")[0].replace("?", "").strip()
+                keyboard = [
+                    [InlineKeyboardButton("📸 معلومات المستخدم", callback_data=f'info_{username}')],
+                    [InlineKeyboardButton("🔥 الستوريات", callback_data=f'stories_{username}'), InlineKeyboardButton("❄️ الهايلات", callback_data=f'highlights_{username}')]
+                ]
+                await update.message.reply_text(f"🔍 نتيجة البحث:\n👤 حساب المستخدم: {username}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+            except: await update.message.reply_text("❌ رابط غير صحيح.")
+        return
+    elif "snapchat.com" in text:
+        if "spotlight" in text and not any(char.isdigit() for char in text.split("spotlight/")[-1]):
+            try:
+                username = text.split("spotlight/")[1].split("/")[0].replace("?", "").strip()
+            except:
+                username = "creator"
+            keyboard = [
+                [InlineKeyboardButton("🖼️ الصورة الشخصية للبروفايل", callback_data=f'snap_avatar_{username}')],
+                [InlineKeyboardButton("👻 فيديوهات منصة الأضواء", callback_data=f'snap_spotlight_{username}')],
+                [InlineKeyboardButton("🔥 الستوريات العامة", callback_data=f'snap_stories_{username}')]
+            ]
+            await update.message.reply_text(f"🔍 نتيجة بحث منصة الأضواء:\n👤 حساب المبدع: {username}", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        else:
+            await download_video(update, context, text, "فيديو سناب شات 👻")
+        return
+    platform = "الميديا"
+    if "tiktok.com" in text: platform = "تيك توك 🎵"
+    elif "youtube.com" in text or "youtu.be" in text: platform = "يوتيوب 🎥"
+    elif "facebook.com" in text or "fb.watch" in text: platform = "فيسبوك 🎬"
+    elif "twitter.com" in text or "x.com" in text: platform = "تويتر 🐦"
+    await download_video(update, context, text, platform)
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    
+    if data.startswith('info_') or data.startswith('stories_') or data.startswith('highlights_'):
+        username = data.split('_')[1]
+        status = await query.edit_message_text(f"🔍 جاري فحص حساب {username} وجلب البيانات...")
+        ydl_opts = {'extract_flat': True, 'skip_download': True, 'quiet': True}
+        if os.path.exists('cookies.txt'): ydl_opts['cookiefile'] = 'cookies.txt'
+        
+        try:
+            url = f"https://www.instagram.com/{username}/"
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            
+            avatar_url = info.get('thumbnail')
+            title = info.get('title', username)
+            description = info.get('description', 'لا يوجد بايو')
+            
+            if data.startswith('info_'):
+                profile_text = f"👤 معلومات الحساب:\n\n🔹 الاسم: {title}\n🔹 اليوزر: {username}\n📝 البايو:\n_{description}_"
+                if avatar_url:
+                    await query.message.reply_photo(photo=avatar_url, caption=profile_text, parse_mode="Markdown")
+                    await status.delete()
+                else:
+                    await status.edit_text(profile_text, parse_mode="Markdown")
+            else:
+                await status.edit_text(f"🔥 ميزة تحميل الستوريات/الهايلات لحساب {username} تتطلب حساب انستغرام وهمي بملف الكوكيز.")
+        except Exception as e:
+            await status.edit_text("❌ حدث خطأ أثناء جلب معلومات الحساب، تأكد من أن الحساب عام وليس خاص (Private).")
+
+    elif data.startswith('snap_avatar_'):
+        username = data.split('_')[2]
+        status = await query.edit_message_text(f"🖼️ جاري جلب الصورة لـ {username}...")
+        ydl_opts = {'extract_flat': True, 'skip_download': True, 'quiet': True}
+        try:
+            url = f"https://www.snapchat.com/spotlight/{username}"
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                avatar_url = info.get('thumbnail')
+            if avatar_url:
+                await query.message.reply_photo(photo=avatar_url, caption=f"📸 صورة بروفايل المبدع: {username}")
+                await status.delete()
+            else: await status.edit_text("❌ لا توجد صورة شخصية.")
+        except: await status.edit_text("❌ حدث خطأ أثناء جلب الصورة.")
+    elif data.startswith('snap_spotlight_') or data.startswith('snap_stories_'):
+        await query.edit_message_text("👻 هذه الميزة قيد التطوير حالياً...")
+
+def main():
+    if not os.path.exists('downloads'): os.makedirs('downloads')
+    app = Application.builder().token(TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("bc", broadcast))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    print("البوت جاهز ويعمل الآن بنجاح... 🚀")
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
